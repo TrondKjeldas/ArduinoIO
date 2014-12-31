@@ -1,10 +1,22 @@
+//
+//
+//
+//
+//
+
 
 #define BUFFSIZE 20
 #define INC(_x) do { _x++; _x = _x % BUFFSIZE; } while(0)
 
 static char responseBuff[255];
 
-class cmdBuff {
+
+/////////////////////////////////////////////////////////////
+//
+// CmdBuff - Class for handling reception of command strings
+//
+/////////////////////////////////////////////////////////////
+class CmdBuff {
 
  private:
   char buffer[BUFFSIZE];
@@ -14,7 +26,7 @@ class cmdBuff {
   int lastCmdLen;
   
  public:
-  cmdBuff()
+  CmdBuff()
   {
     buffer[0] = '\0';
     insert = start = cmdsInBuff = lastCmdLen = 0;
@@ -76,7 +88,191 @@ class cmdBuff {
 };
 
 
-static cmdBuff commandBuff;
+static CmdBuff commandBuff;
+
+
+/////////////////////////////////////////////////////////////
+//
+// Port - Port base class
+//
+/////////////////////////////////////////////////////////////
+class Port
+{
+protected:
+  int ionum;
+public:
+
+  Port(int io);
+
+  virtual int setOValue(int val);
+  int getOValue();
+};
+
+
+Port::Port(int io)
+{
+  ionum = io;
+}
+
+int Port::setOValue(int val)
+{
+  return 0;
+}
+
+int Port::getOValue()
+{
+  return digitalRead(ionum); 
+}
+
+
+/////////////////////////////////////////////////////////////
+//
+// RelayOutPort - Relay Out port
+//
+/////////////////////////////////////////////////////////////
+class RelayOutPort : public Port
+{
+public:
+  RelayOutPort(int io);
+
+  int setOValue(int val);
+};
+
+RelayOutPort::RelayOutPort(int io) : Port(io)
+{
+}
+
+int RelayOutPort::setOValue(int val)
+{
+  if(val == 0 || val == 1)
+  {
+    digitalWrite(ionum, val); 
+    return 1;
+  }
+  return 0;
+}
+
+/////////////////////////////////////////////////////////////
+//
+// Ports - Collection of ports
+//
+/////////////////////////////////////////////////////////////
+class Ports
+{
+private:
+  Port *ports[20];
+  int minPort;
+  int numPorts;
+public:
+  Ports(char *type, int num, int min);
+  
+  Port *getPort(int io);
+};
+
+Ports::Ports(char *type, int num, int min)
+{
+  minPort = min;
+  numPorts = num;
+  
+  for(int i = 0; i < num; i++)
+  {
+    if(match(type, "RO"))
+      ports[i] = new RelayOutPort(min + i);
+    else if(match(type, "DI"))
+      ports[i] = new Port(min + i);
+    if(match(type, "AI"))
+      ports[i] = new Port(min + i);
+  }
+}
+
+Port* Ports::getPort(int io)
+{
+  if( io >= minPort && io < minPort+numPorts )
+  {
+    return ports[io-minPort];
+  }
+  return NULL;
+}
+
+Ports *ROPorts;
+Ports *DIPorts;
+Ports *AIPorts;
+
+/////////////////////////////////////////////////////////////
+//
+// 
+//
+/////////////////////////////////////////////////////////////
+
+void readCmd()
+{
+  while (Serial.available() > 0)
+    commandBuff.put(Serial.read());
+}
+
+void sendResponse(const char *format, ...)
+{
+  va_list args;
+  va_start(args, format);
+  vsprintf(responseBuff, format, args);
+  va_end(args);
+  Serial.println(responseBuff);
+}
+
+int match(const char *s1, const char *s2)
+{
+  return (strncmp(s1, s2, strlen(s2)) == 0);
+}
+
+void handleCommand(char *cmd)
+{
+  int valid = 0;
+  char setOrGet[BUFFSIZE] = "";
+  char portType[BUFFSIZE] = "";
+  int io = 0;
+  int val = 3;
+  int args;
+  Ports *ports = NULL;
+
+  args = sscanf(cmd, "%s %s %d %d", setOrGet, portType, &io, &val);  
+
+  // Figure out port type first...
+  if(args > 2)
+  {
+    // Relay outputs
+    if(match(portType, "RO"))
+      ports = ROPorts;
+    // Digital inputs
+    else if(match(portType, "DI"))
+      ports = DIPorts;
+    // Analog inputs
+    else if(match(portType, "AI"))
+      ports = AIPorts;
+  }
+
+  // Then handle SET or GET command accordingly...
+  if( args  == 4 && match(setOrGet, "SET"))
+  {
+    if( ports && ports->getPort(io) )
+    {
+      valid = ROPorts->getPort(io)->setOValue(val);
+    }
+  }
+  else if(args == 3 && match(setOrGet, "GET"))
+  {      
+    if( ports && ports->getPort(io) )
+    {
+      valid = 1;
+      sendResponse("OK %s %d %d\n", portType, io, ROPorts->getPort(io)->getOValue());
+    }
+  }
+
+  // If command unsuccessful, give error message...
+  if(!valid)
+  {
+    sendResponse("Invalid command: %s (%s, %s, %d, %d)\n", cmd, setOrGet, portType, io, val);
+  }
+}
 
 void setup()
 {
@@ -99,49 +295,11 @@ void setup()
   while (!Serial) {
     ; // wait for serial port to connect. Needed for Leonardo only
   }
-}
 
-void readCmd()
-{
-  while (Serial.available() > 0)
-    commandBuff.put(Serial.read());
-}
-
-void setOValue(int io, int val)
-{
-  digitalWrite(io, val); 
-}
-
-void handleCommand(char *cmd)
-{
-  int valid = 0;
-  char setOrGet[BUFFSIZE] = "";
-  int io = 0;
-  int val = 3;
-
-  if( sscanf(cmd, "%s %d %d", setOrGet, &io, &val) == 3 )
-  {
-    if(strncmp(setOrGet, "SET", 3) == 0)
-    {
-      if( io >= 8 && io <= 13 )
-      {
-	if(val == 0 || val == 1)
-	{
-	  valid = 1;
-	  setOValue(io, val);
-	}
-      }
-    }
-    else if(strncmp(setOrGet, "GET", 3) == 0)
-    {
-    }
-  }
-  
-  if(!valid)
-  {
-    sprintf(responseBuff, "Invalid command: %s (%s, %d, %d)\n", cmd, setOrGet, io, val);
-    Serial.println(responseBuff);
-  }
+  ROPorts = new Ports("RO", 6, 8);
+  DIPorts = new Ports("DI", 6, 2);
+  //AIPorts = new Ports("AI", 6, 8);
+  AIPorts = NULL;
 }
 
 void loop()
@@ -152,9 +310,6 @@ void loop()
   {
     char *cmd = commandBuff.get();
 
-    sprintf(responseBuff, "cmd: %s\n", cmd);
-    Serial.println(responseBuff);
-    
     handleCommand(cmd);
   }
 }
