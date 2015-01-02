@@ -1,15 +1,34 @@
+/////////////////////////////////////////////////////////////
 //
+// Arduino FW for controlling the Welleman KA05 IO shield.
 //
+// Command set:
 //
+//  SET <port type> <port no> <value>
+//  GET <port type> <port no>
 //
+//  SUBSCRIBE CHANGES <ON|OFF>
 //
+// Port types:
+//
+//  RO - Relay Output ports (8-13)
+//  DI - Digital Input ports (2-7)
+//  AI - Analog Input ports (0-5)
+//
+/////////////////////////////////////////////////////////////
 
+const int numIoPortsOfEachType = 6;
+const int firstRelayOutPort = 8;
+const int firstDigitalInPort = 2;
+const int firstAnalogInPort = A0;
 
-#define BUFFSIZE 20
+#define BUFFSIZE 30
 #define INC(_x) do { _x++; _x = _x % BUFFSIZE; } while(0)
 
 static char responseBuff[255];
+static int sendChanges = 0;
 
+void sendResponse(const char *format, ...);
 
 /////////////////////////////////////////////////////////////
 //
@@ -99,19 +118,23 @@ static CmdBuff commandBuff;
 class Port
 {
 protected:
+  int lastIValue;
   int ionum;
 public:
 
   Port(int io);
 
   virtual int setOValue(int val);
-  int getOValue();
+  virtual int getIValue();
+
+  int getLastIValue();
 };
 
 
 Port::Port(int io)
 {
   ionum = io;
+  lastIValue = -1;
 }
 
 int Port::setOValue(int val)
@@ -119,11 +142,16 @@ int Port::setOValue(int val)
   return 0;
 }
 
-int Port::getOValue()
+int Port::getIValue()
 {
-  return digitalRead(ionum); 
+  lastIValue = digitalRead(ionum);
+  return lastIValue; 
 }
 
+int Port::getLastIValue()
+{
+  return lastIValue;
+}
 
 /////////////////////////////////////////////////////////////
 //
@@ -147,9 +175,33 @@ int RelayOutPort::setOValue(int val)
   if(val == 0 || val == 1)
   {
     digitalWrite(ionum, val); 
+    lastIValue = val;
     return 1;
   }
   return 0;
+}
+
+/////////////////////////////////////////////////////////////
+//
+// AnalogInPort - Analog Input port
+//
+/////////////////////////////////////////////////////////////
+class AnalogInPort : public Port
+{
+public:
+  AnalogInPort(int io);
+
+  int getIValue();
+};
+
+AnalogInPort::AnalogInPort(int io) : Port(io)
+{
+}
+
+int AnalogInPort::getIValue()
+{
+  lastIValue = analogRead(ionum);
+  return lastIValue; 
 }
 
 /////////////////////////////////////////////////////////////
@@ -180,8 +232,8 @@ Ports::Ports(char *type, int num, int min)
       ports[i] = new RelayOutPort(min + i);
     else if(match(type, "DI"))
       ports[i] = new Port(min + i);
-    if(match(type, "AI"))
-      ports[i] = new Port(min + i);
+    else if(match(type, "AI"))
+      ports[i] = new AnalogInPort(min + i);
   }
 }
 
@@ -234,43 +286,62 @@ void handleCommand(char *cmd)
   int args;
   Ports *ports = NULL;
 
-  args = sscanf(cmd, "%s %s %d %d", setOrGet, portType, &io, &val);  
+  // Handle the non-port related commands...
 
-  // Figure out port type first...
-  if(args > 2)
+  if(match(cmd, "SUBSCRIBE CHANGES ON"))
   {
-    // Relay outputs
-    if(match(portType, "RO"))
-      ports = ROPorts;
-    // Digital inputs
-    else if(match(portType, "DI"))
-      ports = DIPorts;
-    // Analog inputs
-    else if(match(portType, "AI"))
-      ports = AIPorts;
+    sendResponse("OK");
+    sendChanges = 1;
+    valid = 1;
   }
-
-  // Then handle SET or GET command accordingly...
-  if( args  == 4 && match(setOrGet, "SET"))
+  else if(match(cmd, "SUBSCRIBE CHANGES OFF"))
   {
-    if( ports && ports->getPort(io) )
+    sendResponse("OK");
+    sendChanges = 0;
+    valid = 1;
+  }
+  else
+  {
+    // Handle the SET and GET commands...
+    
+    args = sscanf(cmd, "%s %s %d %d", setOrGet, portType, &io, &val);  
+    
+    // Figure out port type first...
+    if(args > 2)
     {
-      valid = ROPorts->getPort(io)->setOValue(val);
+      // Relay outputs
+      if(match(portType, "RO"))
+	ports = ROPorts;
+      // Digital inputs
+      else if(match(portType, "DI"))
+	ports = DIPorts;
+      // Analog inputs
+      else if(match(portType, "AI"))
+	ports = AIPorts;
+    }
+    
+    // Then handle SET or GET command accordingly...
+    if( args  == 4 && match(setOrGet, "SET"))
+    {
+      if( ports && ports->getPort(io) )
+      {
+	valid = ports->getPort(io)->setOValue(val);
+      }
+    }
+    else if(args == 3 && match(setOrGet, "GET"))
+    {      
+      if( ports && ports->getPort(io) )
+      {
+	valid = 1;
+	sendResponse("OK %s %d %d\n", portType, io, ports->getPort(io)->getIValue());
+      }
     }
   }
-  else if(args == 3 && match(setOrGet, "GET"))
-  {      
-    if( ports && ports->getPort(io) )
-    {
-      valid = 1;
-      sendResponse("OK %s %d %d\n", portType, io, ROPorts->getPort(io)->getOValue());
-    }
-  }
-
+    
   // If command unsuccessful, give error message...
   if(!valid)
   {
-    sendResponse("Invalid command: %s (%s, %s, %d, %d)\n", cmd, setOrGet, portType, io, val);
+    sendResponse("Invalid command: %s\n", cmd);
   }
 }
 
@@ -296,22 +367,51 @@ void setup()
     ; // wait for serial port to connect. Needed for Leonardo only
   }
 
-  ROPorts = new Ports("RO", 6, 8);
-  DIPorts = new Ports("DI", 6, 2);
-  //AIPorts = new Ports("AI", 6, 8);
-  AIPorts = NULL;
+  ROPorts = new Ports("RO", numIoPortsOfEachType, firstRelayOutPort);
+  DIPorts = new Ports("DI", numIoPortsOfEachType, firstDigitalInPort);
+  AIPorts = new Ports("AI", numIoPortsOfEachType, firstAnalogInPort);
 }
 
 void loop()
 {
-  readCmd();
-  
-  if(commandBuff.cmdAvailable())
-  {
-    char *cmd = commandBuff.get();
+  static int loopcount;
+  int io;
 
-    handleCommand(cmd);
+  // Command handling...
+  readCmd();  
+  if(commandBuff.cmdAvailable())
+    handleCommand(commandBuff.get());
+
+
+  // Monitor values and report changes. Poll every 2 seconds (approx.)
+  if(sendChanges && (++loopcount > 20))
+  {
+    loopcount = 0;
+
+    for(io = firstRelayOutPort; io < firstRelayOutPort + numIoPortsOfEachType; io++)
+      if( ROPorts->getPort(io)->getLastIValue() != ROPorts->getPort(io)->getIValue() )
+      {
+	sendResponse("RO %d %d\n", io, ROPorts->getPort(io)->getLastIValue());
+	delay(10);
+      }
+
+    for(io = firstDigitalInPort; io < firstDigitalInPort + numIoPortsOfEachType; io++)
+      if( DIPorts->getPort(io)->getLastIValue() != DIPorts->getPort(io)->getIValue() )
+      {
+	sendResponse("DI %d %d\n", io, DIPorts->getPort(io)->getLastIValue());
+	delay(10);
+      }
+
+    for(io = firstAnalogInPort; io < firstAnalogInPort + numIoPortsOfEachType; io++)
+      if( AIPorts->getPort(io)->getLastIValue() != AIPorts->getPort(io)->getIValue() )
+      {
+	sendResponse("AI %d %d\n", io, AIPorts->getPort(io)->getLastIValue());
+	delay(10);
+      }
   }
+
+  // Don't stress it...
+  delay(100);
 }
 
 
