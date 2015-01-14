@@ -326,6 +326,7 @@ void handleCommand(char *cmd)
       if( ports && ports->getPort(io) )
       {
 	valid = ports->getPort(io)->setOValue(val);
+	sendResponse("OK");
       }
     }
     else if(args == 3 && match(setOrGet, "GET"))
