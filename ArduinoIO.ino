@@ -22,13 +22,14 @@ const int firstRelayOutPort = 8;
 const int firstDigitalInPort = 2;
 const int firstAnalogInPort = A0;
 
-#define BUFFSIZE 30
+#define BUFFSIZE 200
 #define INC(_x) do { _x++; _x = _x % BUFFSIZE; } while(0)
 
 static char responseBuff[255];
 static int sendChanges = 0;
 
 void sendResponse(const char *format, ...);
+int match(const char *s1, const char *s2);
 
 /////////////////////////////////////////////////////////////
 //
@@ -43,16 +44,16 @@ class CmdBuff {
   int start;
   int cmdsInBuff;
   int lastCmdLen;
-  
+
  public:
   CmdBuff()
   {
     buffer[0] = '\0';
     insert = start = cmdsInBuff = lastCmdLen = 0;
   }
-  
+
   void put(char c)
-  { 
+  {
     if(c == 13)
     {
       if( lastCmdLen > 0 )
@@ -73,7 +74,7 @@ class CmdBuff {
 
   char* get()
   {
-    char buff[BUFFSIZE];
+    static char buff[BUFFSIZE];
     int s = start;
     int i = 0;
 
@@ -83,7 +84,7 @@ class CmdBuff {
       buff[i] = buffer[s];
       INC(i);
       INC(s);
-    }    
+    }
     buff[i] = '\0';
 
     start = s;
@@ -145,7 +146,7 @@ int Port::setOValue(int val)
 int Port::getIValue()
 {
   lastIValue = digitalRead(ionum);
-  return lastIValue; 
+  return lastIValue;
 }
 
 int Port::getLastIValue()
@@ -174,7 +175,7 @@ int RelayOutPort::setOValue(int val)
 {
   if(val == 0 || val == 1)
   {
-    digitalWrite(ionum, val); 
+    digitalWrite(ionum, val);
     lastIValue = val;
     return 1;
   }
@@ -201,7 +202,7 @@ AnalogInPort::AnalogInPort(int io) : Port(io)
 int AnalogInPort::getIValue()
 {
   lastIValue = analogRead(ionum);
-  return lastIValue; 
+  return lastIValue;
 }
 
 /////////////////////////////////////////////////////////////
@@ -216,16 +217,16 @@ private:
   int minPort;
   int numPorts;
 public:
-  Ports(char *type, int num, int min);
-  
+  Ports(const char *type, int num, int min);
+
   Port *getPort(int io);
 };
 
-Ports::Ports(char *type, int num, int min)
+Ports::Ports(const char *type, int num, int min)
 {
   minPort = min;
   numPorts = num;
-  
+
   for(int i = 0; i < num; i++)
   {
     if(match(type, "RO"))
@@ -252,7 +253,7 @@ Ports *AIPorts;
 
 /////////////////////////////////////////////////////////////
 //
-// 
+//
 //
 /////////////////////////////////////////////////////////////
 
@@ -276,7 +277,7 @@ int match(const char *s1, const char *s2)
   return (strncmp(s1, s2, strlen(s2)) == 0);
 }
 
-void handleCommand(char *cmd)
+void handleCommand(const char *cmd)
 {
   int valid = 0;
   char setOrGet[BUFFSIZE] = "";
@@ -303,9 +304,9 @@ void handleCommand(char *cmd)
   else
   {
     // Handle the SET and GET commands...
-    
-    args = sscanf(cmd, "%s %s %d %d", setOrGet, portType, &io, &val);  
-    
+
+    args = sscanf(cmd, "%s %s %d %d", setOrGet, portType, &io, &val);
+
     // Figure out port type first...
     if(args > 2)
     {
@@ -319,7 +320,7 @@ void handleCommand(char *cmd)
       else if(match(portType, "AI"))
 	ports = AIPorts;
     }
-    
+
     // Then handle SET or GET command accordingly...
     if( args  == 4 && match(setOrGet, "SET"))
     {
@@ -330,7 +331,7 @@ void handleCommand(char *cmd)
       }
     }
     else if(args == 3 && match(setOrGet, "GET"))
-    {      
+    {
       if( ports && ports->getPort(io) )
       {
 	valid = 1;
@@ -338,7 +339,7 @@ void handleCommand(char *cmd)
       }
     }
   }
-    
+
   // If command unsuccessful, give error message...
   if(!valid)
   {
@@ -354,13 +355,13 @@ void setup()
   pinMode(11, OUTPUT);
   pinMode(12, OUTPUT);
   pinMode(13, OUTPUT);
-  
+
   pinMode(7, INPUT);
   pinMode(6, INPUT);
   pinMode(5, INPUT);
   pinMode(4, INPUT);
   pinMode(3, INPUT);
-  pinMode(2, INPUT);  
+  pinMode(2, INPUT);
 
  // start serial port at 9600 bps and wait for port to open:
   Serial.begin(9600);
@@ -379,7 +380,7 @@ void loop()
   int io;
 
   // Command handling...
-  readCmd();  
+  readCmd();
   if(commandBuff.cmdAvailable())
     handleCommand(commandBuff.get());
 
@@ -414,5 +415,3 @@ void loop()
   // Don't stress it...
   delay(100);
 }
-
-
